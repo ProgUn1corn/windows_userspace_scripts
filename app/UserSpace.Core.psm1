@@ -2,6 +2,24 @@
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $script:NL = [Environment]::NewLine
+# 语言资源只含文本。路径作为参数插入，不执行字典内容，也不调用翻译服务。
+$script:TextResources = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'UserSpace.Strings.json'), [Text.Encoding]::UTF8) | ConvertFrom-Json
+function Set-USLanguage {
+    param([ValidateSet('Auto','zh-CN','en')][string]$Language = 'Auto')
+    if ($Language -eq 'Auto') {
+        $Language = if ([Globalization.CultureInfo]::CurrentUICulture.Name -like 'zh*') {'zh-CN'} else {'en'}
+    }
+    $script:Language = $Language
+}
+function Get-USLanguage { $script:Language }
+function Get-USText {
+    param([Parameter(Mandatory)][string]$Key, [object[]]$Arguments = @())
+    $table = $script:TextResources.PSObject.Properties[$script:Language].Value
+    $entry = $table.PSObject.Properties[$Key]
+    if ($null -eq $entry -or $entry.Value -isnot [string]) {throw "Missing language resource: $Key"}
+    [string]::Format([Globalization.CultureInfo]::CurrentCulture, [string]$entry.Value, [object[]]$Arguments)
+}
+Set-USLanguage
 if (-not ('UserSpaceInitV4.Native' -as [type])) { Add-Type -Path (Join-Path $PSScriptRoot 'UserSpace.Native.cs') }
 $script:Presets = @('Assets','Desktop','Documents','Downloads','Games','Music','Pictures','Projects','Resources','Utils','Videos','VSTPlugins')
 # 六个常用入口、五个 Local 入口；桌面没有另加不存在的 LocalDesktop。
@@ -14,7 +32,7 @@ $script:Folders = @(
     @{Name='Videos'; Id='18989B1D-99B5-455B-841C-AB7C74E4DDFC'; LocalId='35286A68-3C57-41A1-BBB1-0EAE73D76C95'; Reg='My Video'; Legacy=14; Net='MyVideos'}
 )
 $script:RunnerHashes = @{}
-foreach ($file in @('UserSpace.ps1','UserSpace.Core.psm1','UserSpace.Native.cs')) {
+foreach ($file in @('UserSpace.ps1','UserSpace.Core.psm1','UserSpace.Native.cs','UserSpace.Strings.json')) {
     $script:RunnerHashes[$file] = (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot $file) -Algorithm SHA256).Hash
 }
 function Get-USKnownPath([string]$Id, [switch]$Default) { [UserSpaceInitV4.Native]::KnownPath($Id, $Default.IsPresent) }
@@ -30,7 +48,7 @@ function Get-USContext {
 
 function ConvertTo-USPath([string]$Path) {
     if ([string]::IsNullOrWhiteSpace($Path) -or $Path -notmatch '^[A-Za-z]:\\') {
-        throw "需要本地绝对路径：$Path"
+        throw (Get-USText 'Core001' -Arguments @(($Path)))
     }
     $full = [IO.Path]::GetFullPath($Path)
     if ($full.Length -gt 3) { $full = $full.TrimEnd('\') }
@@ -48,7 +66,7 @@ function Assert-USPlainPath([string]$Path) {
         if ($part) { $walk = Join-Path $walk $part }
         $entry = [UserSpaceInitV4.Native]::Inspect($walk)
         if ($entry.Exists -and (-not $entry.Directory -or $entry.Reparse)) {
-            throw "这里需要普通目录，但发现文件或重解析点：$walk"
+            throw (Get-USText 'Core002' -Arguments @(($walk)))
         }
     }
 }
@@ -63,14 +81,14 @@ function Assert-USMovePaths([string]$Source, [string]$Target, [string]$SourceRoo
     if (-not (Test-USSamePath (Split-Path -Parent $sourceFull) $sourceBase) -or
         -not (Test-USSamePath (Split-Path -Parent $targetFull) $targetBase) -or
         [IO.Path]::GetFileName($sourceFull) -ine [IO.Path]::GetFileName($targetFull)) {
-        throw '移动范围不是已确认的系统目录和对应目标目录。'
+        throw (Get-USText 'Core003')
     }
     if ([IO.Path]::GetPathRoot($sourceFull) -ine [IO.Path]::GetPathRoot($targetFull)) {
-        throw '本版只处理同一卷内的初始化，不进行跨盘搬迁。'
+        throw (Get-USText 'Core004')
     }
-    if (-not ([UserSpaceInitV4.Native]::Inspect($sourceFull)).Exists) { throw "待移动项目已不存在：$sourceFull" }
+    if (-not ([UserSpaceInitV4.Native]::Inspect($sourceFull)).Exists) { throw (Get-USText 'Core005' -Arguments @(($sourceFull))) }
     if (([UserSpaceInitV4.Native]::Inspect($targetFull)).Exists) {
-        throw "同名冲突，未覆盖：$targetFull。请先检查两边的项目。"
+        throw (Get-USText 'Core006' -Arguments @(($targetFull)))
     }
 }
 
@@ -78,7 +96,7 @@ function Assert-USMovePaths([string]$Source, [string]$Target, [string]$SourceRoo
 function Move-USItem([string]$Source, [string]$Target) { [UserSpaceInitV4.Native]::MoveEntry($Source, $Target) }
 function Get-USIconDefinition([string]$Id) {
     $key=Get-ItemProperty -LiteralPath "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FolderDescriptions\{$Id}"
-    if (-not $key.Icon) { throw "系统目录缺少图标定义：$Id" }
+    if (-not $key.Icon) { throw (Get-USText 'Core007' -Arguments @(($Id))) }
     [pscustomobject]@{Icon=[string]$key.Icon; Label=[string]$key.LocalizedName}
 }
 function Get-USIniSnapshot([string]$Directory) {
@@ -86,8 +104,8 @@ function Get-USIniSnapshot([string]$Directory) {
     $path=Join-Path $Directory 'desktop.ini'
     $entry=[UserSpaceInitV4.Native]::Inspect($path)
     if (-not $entry.Exists) { return [pscustomobject]@{Path=$path; Exists=$false; Bytes=''; Text=''; Attributes=0; Recognized=$false} }
-    if ($entry.Directory -or $entry.Reparse) { throw "desktop.ini 不是普通文件：$path" }
-    if ((Get-Item -LiteralPath $path -Force).Length -gt 65536) { throw "desktop.ini 大小异常：$path" }
+    if ($entry.Directory -or $entry.Reparse) { throw (Get-USText 'Core008' -Arguments @(($path))) }
+    if ((Get-Item -LiteralPath $path -Force).Length -gt 65536) { throw (Get-USText 'Core009' -Arguments @(($path))) }
     $bytes=[IO.File]::ReadAllBytes($path)
     $text=[IO.File]::ReadAllText($path)
     [pscustomobject]@{Path=$path; Exists=$true; Bytes=[Convert]::ToBase64String($bytes); Text=$text; Attributes=[int][IO.File]::GetAttributes($path); Recognized=($text -match '(?im)^\s*\[\.ShellClassInfo\]\s*$')}
@@ -98,7 +116,7 @@ function Set-USIniValues([string]$Text, $Values) {
     $start=-1
     for ($i=0; $i -lt $lines.Count; $i++) {
         if ($lines[$i] -match '^\s*\[\.ShellClassInfo\]\s*$') {
-            if ($start -ge 0) { throw 'desktop.ini 包含重复的 ShellClassInfo 段。' }
+            if ($start -ge 0) { throw (Get-USText 'Core010') }
             $start=$i
         }
     }
@@ -122,7 +140,7 @@ function Get-USInitPlan {
         $bindings=foreach ($id in @($definition.Id,$definition.LocalId)) {
             if (-not $id) { continue }
             $regName=if ($id -eq $definition.Id) {$definition.Reg} else {'{'+$id+'}'}
-            [pscustomobject]@{Id=$id; Name=$definition.Name; Kind=$(if ($id -eq $definition.Id) {'常用'} else {'Local'}); Previous=(Get-USKnownPath $id); Target=$target; RegistryName=$regName; RegistryPrevious=(Get-USRegistryValue 'User Shell Folders' $regName); Attempted=$false}
+            [pscustomobject]@{Id=$id; Name=$definition.Name; Kind=$(if ($id -eq $definition.Id) {(Get-USText 'Core011')} else {'Local'}); Previous=(Get-USKnownPath $id); Target=$target; RegistryName=$regName; RegistryPrevious=(Get-USRegistryValue 'User Shell Folders' $regName); Attempted=$false}
         }
         [pscustomobject]@{Name=$definition.Name; Id=$definition.Id; OldPath=$old; TargetPath=$target; Bindings=@($bindings); Moves=@(); Metadata=$null}
     }
@@ -147,18 +165,18 @@ function Assert-USNoUserContents([string]$Path) {
     $ini=Get-USIniSnapshot $Path
     foreach ($child in Get-ChildItem -LiteralPath $Path -Force) {
         if ($child.Name -ieq 'desktop.ini' -and $ini.Recognized) { continue }
-        throw "旧目录还有内容：$($child.FullName)。请关闭使用目录的程序并保留两边内容。"
+        throw (Get-USText 'Core012' -Arguments @(($($child.FullName))))
     }
 }
 function Assert-USFreshPlan($Plan) {
     Assert-USPlainPath $Plan.Context.Profile
     Assert-USPlainPath $Plan.Context.Root
-    if (-not [IO.Directory]::Exists($Plan.Context.Profile)) { throw '请在日用账户登录后运行。' }
+    if (-not [IO.Directory]::Exists($Plan.Context.Profile)) { throw (Get-USText 'Core013') }
     foreach ($folder in $Plan.Folders) {
         foreach ($binding in $folder.Bindings) {
             Assert-USBindingRegistry $binding $folder.OldPath
             if (-not (Test-USSamePath $binding.Previous $folder.OldPath) -and -not (Test-USSamePath $binding.Previous $folder.TargetPath)) {
-                throw "$($binding.Name) / $($binding.Kind) 指向其他位置：$($binding.Previous)。本工具不接管 OneDrive 或其他重定向。"
+                throw (Get-USText 'Core014' -Arguments @(($($binding.Name)),($($binding.Kind)),($($binding.Previous))))
             }
         }
         Assert-USPlainPath $folder.OldPath
@@ -166,7 +184,7 @@ function Assert-USFreshPlan($Plan) {
         $folder.Moves=@(Get-USFolderMoves $folder)
         $oldIni=Get-USIniSnapshot $folder.OldPath
         $newIni=Get-USIniSnapshot $folder.TargetPath
-        if (($newIni.Exists -and -not $newIni.Recognized) -or ($oldIni.Exists -and -not $oldIni.Recognized)) { throw "发现无法识别的 desktop.ini：$($folder.Name)，未覆盖。" }
+        if (($newIni.Exists -and -not $newIni.Recognized) -or ($oldIni.Exists -and -not $oldIni.Recognized)) { throw (Get-USText 'Core015' -Arguments @(($($folder.Name)))) }
         $icon=Get-USIconDefinition $folder.Id
         $seed=if ($newIni.Exists) {$newIni.Text} else {$oldIni.Text}
         $values=[ordered]@{IconResource=$icon.Icon}
@@ -182,15 +200,15 @@ function Assert-USUpgradePlan($Plan) {
     Assert-USPlainPath $Plan.Context.Root
     foreach ($folder in $Plan.Folders) {
         Assert-USPlainPath $folder.TargetPath
-        if (-not [IO.Directory]::Exists($folder.TargetPath)) {throw "升级要求目标目录已经存在：$($folder.TargetPath)。未创建或搬迁任何目录。"}
+        if (-not [IO.Directory]::Exists($folder.TargetPath)) {throw (Get-USText 'Core016' -Arguments @(($($folder.TargetPath))))}
         foreach ($binding in $folder.Bindings) {
             Assert-USBindingRegistry $binding $folder.OldPath
             if (-not (Test-USSamePath $binding.Previous $folder.OldPath) -and -not (Test-USSamePath $binding.Previous $folder.TargetPath)) {
-                throw "$($folder.Name) / $($binding.Kind) 指向其他位置：$($binding.Previous)。本模式不接管 OneDrive 或其他重定向。"
+                throw (Get-USText 'Core017' -Arguments @(($($folder.Name)),($($binding.Kind)),($($binding.Previous))))
             }
         }
         $ini=Get-USIniSnapshot $folder.TargetPath
-        if ($ini.Exists -and -not $ini.Recognized) {throw "发现无法识别的 desktop.ini：$($folder.Name)，未覆盖。"}
+        if ($ini.Exists -and -not $ini.Recognized) {throw (Get-USText 'Core018' -Arguments @(($($folder.Name))))}
         $icon=Get-USIconDefinition $folder.Id
         $values=[ordered]@{IconResource=$icon.Icon}
         if ($icon.Label) {$values['LocalizedResourceName']=$icon.Label}
@@ -200,7 +218,7 @@ function Assert-USUpgradePlan($Plan) {
 function Assert-USBindingRegistry($Binding,[string]$OldPath) {
     $value=$Binding.RegistryPrevious
     if ($value.Exists -and -not (Test-USSamePath $value.Expanded $OldPath) -and -not (Test-USSamePath $value.Expanded $Binding.Target)) {
-        throw "$($Binding.Name) / $($Binding.Kind) 的 User Shell Folders 指向其他位置：$($value.Expanded)。不接管 OneDrive 或其他重定向。"
+        throw (Get-USText 'Core019' -Arguments @(($($Binding.Name)),($($Binding.Kind)),($($value.Expanded))))
     }
 }
 function Test-USBindingNeedsUpdate($Binding,[string]$Current) {
@@ -211,7 +229,7 @@ function Assert-USBindingRegistryUnchanged($Binding) {
     $value=Get-USRegistryValue 'User Shell Folders' $Binding.RegistryName
     $before=$Binding.RegistryPrevious
     if ($value.Exists -ne $before.Exists -or $value.Kind -cne $before.Kind -or $value.Raw -cne $before.Raw) {
-        if (-not $value.Exists -or -not (Test-USSamePath $value.Expanded $Binding.Target)) {throw "$($Binding.Name) 的 User Shell Folders 在操作中变化，已停止。"}
+        if (-not $value.Exists -or -not (Test-USSamePath $value.Expanded $Binding.Target)) {throw (Get-USText 'Core020' -Arguments @(($($Binding.Name))))}
     }
 }
 function Get-USRepairPreview($Plan) {
@@ -229,10 +247,10 @@ function Get-USRepairPreview($Plan) {
         [pscustomobject]@{Folder=$folder.Name; Via='Shell Folders'; Current=$value.Expanded; Target=$folder.TargetPath; Exists=$value.Exists; Kind=$value.Kind; Raw=$value.Raw}
     })
     $changes=@($rows | Where-Object {-not $_.Exists -or -not (Test-USSamePath $_.Current $_.Target)})
-    $text=if ($changes.Count -eq 0) {'地址均与目标一致，无需改写路径；仍会检查并更新图标。'} else {
+    $text=if ($changes.Count -eq 0) {(Get-USText 'Core021')} else {
         (@($changes | ForEach-Object {
-            $current=if ($_.Exists) {$_.Current} else {'（未设置）'}
-            "$($_.Folder) / $($_.Via)$($script:NL)  当前：$current$($script:NL)  目标：$($_.Target)"
+            $current=if ($_.Exists) {$_.Current} else {(Get-USText 'Core022')}
+            (Get-USText 'Core023' -Arguments @(($($_.Folder)),($($_.Via)),($($script:NL)),($current),($($script:NL)),($($_.Target))))
         })) -join ($script:NL+$script:NL)
     }
     # 确认期间设置若改变，重新显示清单，不沿用旧授权继续修正新发现的差异。
@@ -259,9 +277,9 @@ function Get-USRegistrySnapshot {
 function Set-USShellFolderValue([string]$Name, [string]$Path) {
     # 仅写旧软件兼容键的六个常用值；真实重定向仍由 Known Folder API 管理。
     $definitions=@($script:Folders | Where-Object Reg -eq $Name)
-    if ($definitions.Count -ne 1) {throw "拒绝写入范围外的 Shell Folders 值：$Name"}
+    if ($definitions.Count -ne 1) {throw (Get-USText 'Core024' -Arguments @(($Name)))}
     $expected=Join-Path (Get-USContext).Root $definitions[0].Name
-    if (-not (Test-USSamePath $Path $expected)) {throw '拒绝写入非 UserSpace 的兼容路径。'}
+    if (-not (Test-USSamePath $Path $expected)) {throw (Get-USText 'Core025')}
     $registry=[Microsoft.Win32.Registry]::CurrentUser.CreateSubKey('Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders')
     try {$registry.SetValue($Name,$expected,[Microsoft.Win32.RegistryValueKind]::String)}
     finally {if ($registry) {$registry.Dispose()}}
@@ -273,7 +291,7 @@ function Sync-USShellFolderCache($Journal) {
     $failed=@($verification.Checks | Where-Object {-not $_.Pass -and $_.Via -ne 'Shell Folders'})
     if ($failed.Count -gt 0) {
         $Journal.State.Details.Verification=$verification
-        throw ("系统入口或图标验收未通过，未同步兼容值："+$script:NL+((@($failed | ForEach-Object {"$($_.Folder)/$($_.Via): $($_.Actual) $($_.Error)"})) -join $script:NL))
+        throw ((Get-USText 'Core026')+$script:NL+((@($failed | ForEach-Object {"$($_.Folder)/$($_.Via): $($_.Actual) $($_.Error)"})) -join $script:NL))
     }
     $context=Get-USContext
     $rows=@(foreach ($definition in $script:Folders) {
@@ -290,18 +308,18 @@ function Sync-USShellFolderCache($Journal) {
         $definition=@($script:Folders | Where-Object Reg -eq $row.Name)[0]
         # 写前再次确认权威位置与目标目录，避免把其他程序刚改的重定向盖回去。
         foreach ($id in @($definition.Id,$definition.LocalId)) {
-            if ($id -and -not (Test-USSamePath (Get-USKnownPath $id) $row.Target)) {throw "$($row.Folder) 的系统入口已变化，停止同步兼容值。"}
+            if ($id -and -not (Test-USSamePath (Get-USKnownPath $id) $row.Target)) {throw (Get-USText 'Core027' -Arguments @(($($row.Folder))))}
         }
-        if (-not (Test-USSamePath (Get-USRegistryValue 'User Shell Folders' $row.Name).Expanded $row.Target)) {throw "$($row.Folder) 的 User Shell Folders 已变化，停止同步兼容值。"}
+        if (-not (Test-USSamePath (Get-USRegistryValue 'User Shell Folders' $row.Name).Expanded $row.Target)) {throw (Get-USText 'Core028' -Arguments @(($($row.Folder))))}
         Assert-USPlainPath $row.Target
-        if (-not [IO.Directory]::Exists($row.Target)) {throw "目标目录已消失：$($row.Target)"}
+        if (-not [IO.Directory]::Exists($row.Target)) {throw (Get-USText 'Core029' -Arguments @(($($row.Target))))}
         $current=Get-USRegistryValue 'Shell Folders' $row.Name
-        if ($current.Exists -ne $row.Before.Exists -or $current.Kind -cne $row.Before.Kind -or $current.Raw -cne $row.Before.Raw) {throw "$($row.Folder) 的兼容值在操作中变化，已停止。"}
+        if ($current.Exists -ne $row.Before.Exists -or $current.Kind -cne $row.Before.Kind -or $current.Raw -cne $row.Before.Raw) {throw (Get-USText 'Core030' -Arguments @(($($row.Folder))))}
         $row.Attempted=$true
         Save-USState $Journal.State $Journal.Path
         Set-USShellFolderValue $row.Name $row.Target
         $after=Get-USRegistryValue 'Shell Folders' $row.Name
-        if (-not $after.Exists -or $after.Kind -ne 'String' -or -not (Test-USSamePath $after.Raw $row.Target)) {throw "$($row.Folder) 的 Shell Folders 写入后回读不一致。"}
+        if (-not $after.Exists -or $after.Kind -ne 'String' -or -not (Test-USSamePath $after.Raw $row.Target)) {throw (Get-USText 'Core031' -Arguments @(($($row.Folder))))}
         $row.Updated=$true
         Save-USState $Journal.State $Journal.Path
     }
@@ -310,7 +328,7 @@ function Write-USFolderMetadata($Folder) {
     Assert-USPlainPath $Folder.TargetPath
     $meta=$Folder.Metadata
     $current=Get-USIniSnapshot $Folder.TargetPath
-    if ($current.Exists -ne $meta.NewIni.Exists -or $current.Bytes -cne $meta.NewIni.Bytes) {throw "desktop.ini 在预检后变化，已停止：$($current.Path)"}
+    if ($current.Exists -ne $meta.NewIni.Exists -or $current.Bytes -cne $meta.NewIni.Bytes) {throw (Get-USText 'Core032' -Arguments @(($($current.Path))))}
     $path=$current.Path
     $temporary=Join-Path $Folder.TargetPath ('.userspace-'+[guid]::NewGuid().ToString('N')+'.tmp')
     $encoding=[Text.UnicodeEncoding]::new($false,$true)
@@ -393,7 +411,7 @@ function Get-USRunnerPath {
         $entry=[UserSpaceInitV4.Native]::Inspect($path)
         if (-not $entry.Exists -or $entry.Reparse -or $entry.Directory -or
             (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -cne $script:RunnerHashes[$name]) {
-            throw '找不到本次运行对应的完整程序。请从 UserSpace 中重新打开本工具并查看状态。'
+            throw (Get-USText 'Core033')
         }
     }
     Join-Path $candidate 'UserSpace.ps1'
@@ -403,7 +421,7 @@ function Invoke-USFreshVerification {
     $engine=Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
     $start=[Diagnostics.ProcessStartInfo]::new()
     $start.FileName=$engine
-    $start.Arguments='-NoLogo -NoProfile -NonInteractive -STA -ExecutionPolicy Bypass -File "'+$runner+'" -Action Verify'
+    $start.Arguments='-NoLogo -NoProfile -NonInteractive -STA -ExecutionPolicy Bypass -File "'+$runner+'" -Action Verify -Language '+(Get-USLanguage)
     $start.UseShellExecute=$false; $start.CreateNoWindow=$true
     $start.RedirectStandardOutput=$true; $start.RedirectStandardError=$true
     # 从 PowerShell 7 启动 Windows PowerShell 时，不继承前者的模块搜索目录。
@@ -414,25 +432,25 @@ function Invoke-USFreshVerification {
     $start.WorkingDirectory=$env:TEMP
     $process=[Diagnostics.Process]::new(); $process.StartInfo=$start
     try {
-        if (-not $process.Start()) {throw '无法启动验收进程。'}
+        if (-not $process.Start()) {throw (Get-USText 'Core034')}
         $stdout=$process.StandardOutput.ReadToEndAsync()
         $stderr=$process.StandardError.ReadToEndAsync()
         if (-not $process.WaitForExit(30000)) {
             $process.Kill()
-            throw '验收进程超过 30 秒，已停止该验收进程。目录内容保留，请重开工具查看状态。'
+            throw (Get-USText 'Core035')
         }
         $output=@($stdout.GetAwaiter().GetResult() -split '\r?\n')
         $errors=$stderr.GetAwaiter().GetResult()
-        if ($process.ExitCode -ne 0) {throw "新进程验收未运行成功：$errors $($output -join ' ')"}
+        if ($process.ExitCode -ne 0) {throw (Get-USText 'Core036' -Arguments @(($errors),($($output -join ' '))))}
     } finally {$process.Dispose()}
     $messages=@($output | Where-Object {$_ -is [string] -and $_.StartsWith('USV4:')})
-    if ($messages.Count -ne 1) {throw '新进程没有返回完整的验收结果。'}
+    if ($messages.Count -ne 1) {throw (Get-USText 'Core037')}
     $json=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($messages[0].Substring(5)))
     $result=$json | ConvertFrom-Json
     $context=Get-USContext
     if ($result.Version -ne 4 -or $result.Sid -ne $context.Sid -or $result.ProcessId -eq $PID -or
         -not (Test-USSamePath $result.Profile $context.Profile) -or @($result.Checks).Count -ne 44) {
-        throw '验收进程的账户、版本或检查数量不一致。'
+        throw (Get-USText 'Core038')
     }
     $result
 }
@@ -442,7 +460,7 @@ function Save-USState($State, [string]$Path) {
     Assert-USPlainPath (Split-Path -Parent $Path)
     foreach ($item in @($Path, "$Path.previous")) {
         $entry = [UserSpaceInitV4.Native]::Inspect($item)
-        if ($entry.Exists -and ($entry.Directory -or $entry.Reparse)) { throw "状态文件位置异常：$item" }
+        if ($entry.Exists -and ($entry.Directory -or $entry.Reparse)) { throw (Get-USText 'Core039' -Arguments @(($item))) }
     }
     $temporary = "$Path.$([guid]::NewGuid().ToString('N')).tmp"
     $encoding = [Text.UTF8Encoding]::new($true)
@@ -479,14 +497,14 @@ function Invoke-USInit {
         }
         foreach ($folder in $plan.Folders) {
             foreach ($binding in $folder.Bindings) {
-                if (-not (Test-USSamePath (Get-USKnownPath $binding.Id) $binding.Previous)) {throw "$($folder.Name) 的设置在操作中发生变化。"}
+                if (-not (Test-USSamePath (Get-USKnownPath $binding.Id) $binding.Previous)) {throw (Get-USText 'Core040' -Arguments @(($($folder.Name))))}
             }
             foreach ($move in $folder.Moves) {
                 Assert-USMovePaths $move.Source $move.Target $folder.OldPath $folder.TargetPath
                 $move.Attempted=$true; $journal.State.Status='MovingContents'
                 Save-USState $journal.State $journal.Path
                 Move-USItem $move.Source $move.Target
-                if (([UserSpaceInitV4.Native]::Inspect($move.Source)).Exists -or -not ([UserSpaceInitV4.Native]::Inspect($move.Target)).Exists) {throw '移动后的检查失败。'}
+                if (([UserSpaceInitV4.Native]::Inspect($move.Source)).Exists -or -not ([UserSpaceInitV4.Native]::Inspect($move.Target)).Exists) {throw (Get-USText 'Core041')}
                 $move.Moved=$true
                 Save-USState $journal.State $journal.Path
             }
@@ -498,11 +516,11 @@ function Invoke-USInit {
                 $current=Get-USKnownPath $binding.Id
                 if (-not (Test-USBindingNeedsUpdate $binding $current)) {continue}
                 Assert-USBindingRegistryUnchanged $binding
-                if (-not (Test-USSamePath $current $binding.Previous)) {throw "$($folder.Name) 的位置被其他程序修改，已停止。"}
+                if (-not (Test-USSamePath $current $binding.Previous)) {throw (Get-USText 'Core042' -Arguments @(($($folder.Name))))}
                 $binding.Attempted=$true; $journal.State.Status='SettingKnownFolders'
                 Save-USState $journal.State $journal.Path
                 Set-USKnownPath $binding.Id $binding.Target
-                if (Test-USBindingNeedsUpdate $binding (Get-USKnownPath $binding.Id)) {throw "$($folder.Name) / $($binding.Kind) 回读不一致。"}
+                if (Test-USBindingNeedsUpdate $binding (Get-USKnownPath $binding.Id)) {throw (Get-USText 'Core043' -Arguments @(($($folder.Name)),($($binding.Kind))))}
             }
             $folder.Metadata.Attempted=$true; $journal.State.Status='SettingIcons'
             Save-USState $journal.State $journal.Path
@@ -515,16 +533,16 @@ function Invoke-USInit {
         $journal.State.Details.Verification=$result
         if (-not $result.Passed) {
             $failed=@($result.Checks | Where-Object {-not $_.Pass} | ForEach-Object {"$($_.Folder)/$($_.Via): $($_.Actual) $($_.Error)"})
-            throw ("入口或图标验收未通过："+$script:NL+($failed -join $script:NL))
+            throw ((Get-USText 'Core044')+$script:NL+($failed -join $script:NL))
         }
         $journal.State.Status='Verified'
         Save-USState $journal.State $journal.Path
     } catch {
         $failure=$_.Exception.Message
         $journal.State.Status='NeedsAttention'; $journal.State.Error=$failure
-        try {Save-USState $journal.State $journal.Path} catch {Write-Warning '记录更新失败，请保留已有记录。'}
+        try {Save-USState $journal.State $journal.Path} catch {Write-Warning (Get-USText 'Core045')}
         # 部分文件已移动时不盲目搬回，避免覆盖其他程序新写入的数据。
-        throw "操作未完整完成：$failure$($script:NL)请保留新旧目录。已移动文件留在新位置，尚未移动文件留在旧位置。$($script:NL)记录：$($journal.Path)"
+        throw (Get-USText 'Core046' -Arguments @(($failure),($($script:NL)),($($script:NL)),($($journal.Path))))
     }
     $note=''
     $shortcutPath=Join-Path $plan.Context.Root 'Desktop\UserSpace.lnk'
@@ -536,29 +554,29 @@ function Invoke-USInit {
                 $shortcut.TargetPath=$plan.Context.Root; $shortcut.WorkingDirectory=$plan.Context.Root; $shortcut.Save()
             } finally {[void][Runtime.InteropServices.Marshal]::ReleaseComObject($shell)}
         }
-    } catch {$note="$($script:NL)快捷方式未创建：$($_.Exception.Message)"}
-    "系统入口与图标元数据通过新进程的 44 项检查。请注销后重新登录，再打开游戏等程序。$($script:NL)旧目录尚未清理，可另点『清理旧空目录』。$($script:NL)记录：$($journal.Path)$note"
+    } catch {$note=(Get-USText 'Core047' -Arguments @(($($script:NL)),($($_.Exception.Message))))}
+    (Get-USText 'Core048' -Arguments @(($($script:NL)),($($script:NL)),($($journal.Path)),($note)))
 }
 function Invoke-USUpgrade([string]$ConfirmedSignature='') {
     $plan=Get-USInitPlan
     Assert-USUpgradePlan $plan
-    if ($ConfirmedSignature -and (Get-USRepairPreview $plan).Signature -cne $ConfirmedSignature) {throw '目录设置在确认期间发生变化。请重新打开修复并更新，核对新的差异清单。尚未修改设置。'}
+    if ($ConfirmedSignature -and (Get-USRepairPreview $plan).Signature -cne $ConfirmedSignature) {throw (Get-USText 'Core049')}
     # RegistryBefore 的 Exists 字段保留“这个值原本不存在”的信息。
     $details=[pscustomobject]@{Folders=$plan.Folders; RegistryBefore=@(Get-USRegistrySnapshot); CompatibilityUpdates=@(); Verification=$null}
     $journal=New-USState 'Upgrade' $details
     try {
         foreach ($folder in $plan.Folders) {
             Assert-USPlainPath $folder.TargetPath
-            if (-not [IO.Directory]::Exists($folder.TargetPath)) {throw "目标目录在操作中消失：$($folder.TargetPath)"}
+            if (-not [IO.Directory]::Exists($folder.TargetPath)) {throw (Get-USText 'Core050' -Arguments @(($($folder.TargetPath))))}
             foreach ($binding in $folder.Bindings) {
                 $current=Get-USKnownPath $binding.Id
-                if (-not (Test-USSamePath $current $binding.Previous)) {throw "$($folder.Name) 的位置被其他程序修改，已停止。"}
+                if (-not (Test-USSamePath $current $binding.Previous)) {throw (Get-USText 'Core051' -Arguments @(($($folder.Name))))}
                 if (-not (Test-USBindingNeedsUpdate $binding $current)) {continue}
                 Assert-USBindingRegistryUnchanged $binding
                 $binding.Attempted=$true; $journal.State.Status='SettingKnownFolders'
                 Save-USState $journal.State $journal.Path
                 Set-USKnownPath $binding.Id $binding.Target
-                if (Test-USBindingNeedsUpdate $binding (Get-USKnownPath $binding.Id)) {throw "$($folder.Name) / $($binding.Kind) 回读不一致。"}
+                if (Test-USBindingNeedsUpdate $binding (Get-USKnownPath $binding.Id)) {throw (Get-USText 'Core052' -Arguments @(($($folder.Name)),($($binding.Kind))))}
             }
             $folder.Metadata.Attempted=$true; $journal.State.Status='SettingIcons'
             Save-USState $journal.State $journal.Path
@@ -570,16 +588,16 @@ function Invoke-USUpgrade([string]$ConfirmedSignature='') {
         $journal.State.Details.Verification=$result
         if (-not $result.Passed) {
             $failed=@($result.Checks | Where-Object {-not $_.Pass} | ForEach-Object {"$($_.Folder)/$($_.Via): $($_.Actual) $($_.Error)"})
-            throw ("入口或图标验收未通过："+$script:NL+($failed -join $script:NL))
+            throw ((Get-USText 'Core053')+$script:NL+($failed -join $script:NL))
         }
         $journal.State.Status='Verified'; Save-USState $journal.State $journal.Path
     } catch {
         $failure=$_.Exception.Message
         $journal.State.Status='NeedsAttention'; $journal.State.Error=$failure
-        try {Save-USState $journal.State $journal.Path} catch {Write-Warning '记录更新失败，请保留已有记录。'}
-        throw "升级未完整完成：$failure$($script:NL)本模式没有搬动用户文件或清理旧目录；部分入口或图标可能已经更新。请保留记录并查看状态。$($script:NL)记录：$($journal.Path)"
+        try {Save-USState $journal.State $journal.Path} catch {Write-Warning (Get-USText 'Core054')}
+        throw (Get-USText 'Core055' -Arguments @(($failure),($($script:NL)),($($script:NL)),($($journal.Path))))
     }
-    "UserSpace 的系统入口与图标通过新进程的 44 项检查。$($script:NL)用户文件、目录内链接及旧目录均保留原位。修正入口后软件会读取新位置，旧位置的数据没有自动搬入。$($script:NL)请注销后重新登录，再检查常用软件。$($script:NL)记录：$($journal.Path)"
+    (Get-USText 'Core056' -Arguments @(($($script:NL)),($($script:NL)),($($script:NL)),($($journal.Path))))
 }
 function Get-USCleanupPlan {
     $context=Get-USContext
@@ -588,29 +606,29 @@ function Get-USCleanupPlan {
         $eligible=$false; $reason=''
         try {
             Assert-USPlainPath $path
-            if (-not [IO.Directory]::Exists($path)) {$reason='不存在，无需清理'}
-            else {Assert-USNoUserContents $path; $eligible=$true; $reason='空目录或仅含已识别的 desktop.ini'}
+            if (-not [IO.Directory]::Exists($path)) {$reason=(Get-USText 'Core057')}
+            else {Assert-USNoUserContents $path; $eligible=$true; $reason=(Get-USText 'Core058')}
         } catch {$reason=$_.Exception.Message}
         [pscustomobject]@{Name=$definition.Name; Path=$path; Eligible=$eligible; Reason=$reason}
     }
 }
 function Invoke-USCleanup([string[]]$Paths) {
-    if (-not $Paths -or $Paths.Count -eq 0) {return '没有需要清理的目录。'}
+    if (-not $Paths -or $Paths.Count -eq 0) {return (Get-USText 'Core059')}
     $context=Get-USContext
     $allowed=@($script:Folders | ForEach-Object {Join-Path $context.Profile $_.Name})
     $selected=@($Paths | ForEach-Object {ConvertTo-USPath $_} | Select-Object -Unique)
     foreach ($path in $selected) {
-        if ($allowed -notcontains (ConvertTo-USPath $path)) {throw "拒绝清理范围外路径：$path"}
+        if ($allowed -notcontains (ConvertTo-USPath $path)) {throw (Get-USText 'Core060' -Arguments @(($path)))}
         Assert-USNoUserContents $path
     }
     $verification=Invoke-USFreshVerification
-    if (-not $verification.Passed) {throw '系统入口/图标尚未全部通过检查，不能清理旧目录。'}
+    if (-not $verification.Passed) {throw (Get-USText 'Core061')}
     $rows=@($selected | ForEach-Object {[pscustomobject]@{Path=$_; Ini=$null; IniArchive=''; OriginalAttributes=0; Attempted=$false; Removed=$false}})
     $journal=New-USState 'Cleanup' $rows
     try {
         foreach ($row in $rows) {
             # 删除前核验绝对路径、入口类型及内容；只调用非递归的空目录删除。
-            if ($allowed -notcontains (ConvertTo-USPath $row.Path)) {throw '清理目标不在已批准列表。'}
+            if ($allowed -notcontains (ConvertTo-USPath $row.Path)) {throw (Get-USText 'Core062')}
             Assert-USNoUserContents $row.Path
             if (-not [IO.Directory]::Exists($row.Path)) {continue}
             $row.Ini=Get-USIniSnapshot $row.Path
@@ -635,20 +653,20 @@ function Invoke-USCleanup([string[]]$Paths) {
         $failure=$_.Exception.Message
         $journal.State.Status='NeedsAttention'; $journal.State.Error=$failure
         try {Save-USState $journal.State $journal.Path} catch {}
-        throw "清理停止：$failure$($script:NL)未递归删除任何内容。保留的元数据和记录：$($journal.Path)"
+        throw (Get-USText 'Core063' -Arguments @(($failure),($($script:NL)),($($journal.Path))))
     }
-    "已清理旧空目录：$($script:NL)$((@($rows | Where-Object Removed | ForEach-Object Path)) -join $script:NL)$($script:NL)元数据已保留在记录旁：$($journal.Path)$($script:NL)写死旧路径的软件以后仍可能重新创建它们。"
+    (Get-USText 'Core064' -Arguments @(($($script:NL)),($((@($rows | Where-Object Removed | ForEach-Object Path)) -join $script:NL)),($($script:NL)),($($journal.Path)),($($script:NL))))
 }
 function Get-USStatus {
     $result=Invoke-USFreshVerification
-    "账户：$($result.User)$($script:NL)新进程编号：$($result.ProcessId)"
-    "完整验收："+$(if ($result.Passed) {'通过（44 项）'} else {'未全部通过，尚不能清理旧目录'})
+    (Get-USText 'Core065' -Arguments @(($($result.User)),($($script:NL)),($($result.ProcessId))))
+    (Get-USText 'Core066')+$(if ($result.Passed) {(Get-USText 'Core067')} else {(Get-USText 'Core068')})
     foreach ($check in $result.Checks) {
-        $label=if ($check.Pass) {'通过'} else {'未通过'}
+        $label=if ($check.Pass) {(Get-USText 'Core069')} else {(Get-USText 'Core070')}
         "$($check.Folder) / $($check.Via)：$label$($script:NL)  $($check.Actual) $($check.Error)"
     }
-    "$($script:NL)旧目录："
+    (Get-USText 'Core071' -Arguments @(($($script:NL))))
     foreach ($entry in Get-USCleanupPlan) {"$($entry.Name)：$($entry.Reason)"}
-    "$($script:NL)接口检查不代表所有软件实测通过。写死路径、已有收藏位置及 Saved Games/AppData 存档不属于这六个目录重定向。"
+    (Get-USText 'Core072' -Arguments @(($($script:NL))))
 }
-Export-ModuleMember -Function Get-USContext,Get-USInitPlan,Assert-USFreshPlan,Invoke-USInit,Assert-USUpgradePlan,Get-USRepairPreview,Invoke-USUpgrade,Get-USStatus,Get-USVerification,Get-USCleanupPlan,Invoke-USCleanup
+Export-ModuleMember -Function Set-USLanguage,Get-USLanguage,Get-USText,Get-USContext,Get-USInitPlan,Assert-USFreshPlan,Invoke-USInit,Assert-USUpgradePlan,Get-USRepairPreview,Invoke-USUpgrade,Get-USStatus,Get-USVerification,Get-USCleanupPlan,Invoke-USCleanup

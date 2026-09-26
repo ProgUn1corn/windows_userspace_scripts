@@ -1,0 +1,31 @@
+# Local credentials and editor configuration
+.ssh/
+.codex/
+.git-credentials
+signingkey
+.env
+.env.*
+!.env.example
+auth.json
+credentials.json
+id_rsa
+id_ed25519
+id_ecdsa
+*.pem
+*.key
+*.pfx
+*.p12
+.vscode/
+.idea/
+
+# Machine-specific operation records and temporary files
+UserSpaceBootstrap/
+*-Repair-*.json
+*-Upgrade-*.json
+*-Cleanup-*.json
+*.previous
+*.log
+*.tmp
+*.bak
+*.zip
+TestResults/
