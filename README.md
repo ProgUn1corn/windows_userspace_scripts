@@ -1,8 +1,12 @@
 # Windows UserSpace
 
-> 开发说明：本项目当前版本由维护者提出需求、委托 OpenAI Codex 编写和修改。维护者没有编程经验，负责确定使用方式并反馈实际测试结果。请先备份数据，再使用涉及文件移动和系统设置的功能。
+> 开发说明：本项目当前版本由维护者提出需求、委托 OpenAI Codex 编写和修改。维护者是非专业开发者，能理解代码的基本逻辑，负责确定使用方式并反馈实际测试结果。请先备份数据，再使用涉及文件移动和系统设置的功能。
 >
-> Development disclosure: The current version was written and revised by OpenAI Codex at the maintainer's request. The maintainer has no programming experience and contributes requirements and hands-on testing feedback. Back up your data before using features that move files or change Windows settings.
+> Development disclosure: OpenAI Codex wrote and revised the current version at the maintainer's request. The maintainer is a non-professional developer who can follow the basic code logic and contributes requirements and hands-on testing feedback. Back up your data before using features that move files or change Windows settings.
+
+> **推荐使用时机：完成 Windows 首次设置（OOBE，Out-of-Box Experience）后，尚未存入个人文件或积累应用数据时，执行“初始化 UserSpace”。** 脚本没有 OOBE 状态或空目录限制；遇到已有内容仍会尝试迁移。对于已经长期使用的系统，请先备份并单独评估迁移影响。已有 UserSpace 的维护可使用“修复并更新”，文件保留原位。
+>
+> **Recommended timing: initialize UserSpace after Windows first-run setup (OOBE, Out-of-Box Experience), before adding personal files or accumulating application data.** The script does not enforce OOBE status or empty folders; it will attempt to move existing content. Back up and assess migration risks before using initialization on an established system. For an existing UserSpace setup, Repair and update keeps files in place.
 
 [中文](#中文) · [English](#english)
 
@@ -45,11 +49,11 @@ UserSpace 将 Windows 的常用个人文件夹集中到 `%USERPROFILE%\UserSpace
 | 按钮 | 适用情况与操作 |
 | --- | --- |
 | 修复并更新（保留原文件） | 已有 UserSpace 时使用。先列出当前位置与目标位置的差异，确认后修正系统设置并更新图标。六个目标目录必须已存在，现有文件和链接保留原位。 |
-| 初始化 UserSpace（迁入已有文件） | 首次配置时使用。补建 12 个预设目录，将六个系统目录中的已有内容迁入对应目标，再更新系统位置和图标。同名冲突会停止操作并保留两边内容。 |
+| 初始化 UserSpace（迁入已有文件） | 推荐用于新装系统完成 OOBE 后的首次配置。补建 12 个预设目录，将六个系统目录中的已有内容迁入对应目标，再更新系统位置和图标。同名冲突会停止操作并保留两边内容。 |
 | 查看状态 | 只读检查目录位置、兼容设置和图标，显示旧目录的清理条件。结果可以复制。 |
 | 清理旧空目录 | 列出可清理的旧位置，另行确认后删除空目录。残留的已识别 `desktop.ini` 会先保存到操作记录旁。普通文件、子目录或链接会阻止清理。 |
 
-“修复并更新”适合更新已有设置。它保留旧位置的数据；软件改为读取 UserSpace 后，你可能需要单独导入这些数据。需要迁入文件时，先核对目录状态，再选择初始化功能。
+“修复并更新”适合更新已有设置。它保留旧位置的数据；软件改为读取 UserSpace 后，你可能需要单独导入这些数据。长期使用的电脑可能存在文件占用、固定路径或相对链接依赖。文件移动检查无法验证所有软件的依赖关系，因此请先备份并核对应用的迁移要求。
 
 ### 系统位置如何生效
 
@@ -99,11 +103,11 @@ The interface follows the Windows display language: Simplified Chinese for Chine
 | Button | When to use it and what it does |
 | --- | --- |
 | Repair and update (keep files in place) | For an existing UserSpace setup. Review location differences, then update Windows settings and folder icons. The six target folders must already exist. Files and links stay where they are. |
-| Initialize UserSpace (move existing files) | For initial setup. Create missing preset folders, move existing content from the six Windows folders, then update locations and icons. A name conflict stops the operation and keeps both copies. |
+| Initialize UserSpace (move existing files) | Recommended for initial configuration after OOBE on a fresh Windows installation. Create missing preset folders, move existing content from the six Windows folders, then update locations and icons. A name conflict stops the operation and keeps both copies. |
 | View status | Read-only checks of folder locations, compatibility settings, icons and old-folder cleanup eligibility. Results can be copied. |
 | Clean up old empty folders | Review eligible old locations, then confirm removal. Any recognized residual `desktop.ini` is saved beside the operation record first. Files, subfolders or links prevent removal. |
 
-Repair keeps data at the old locations. After apps begin using UserSpace, you may need to import that data separately. If you want to move files, review the current folder state before choosing initialization.
+Repair keeps data at the old locations. After apps begin using UserSpace, you may need to import that data separately. Established systems may have locked files, fixed paths or relative-link dependencies. File-move checks cannot verify every app's dependencies. Back up your data and review app-specific migration requirements first.
 
 ### How redirection works
 
@@ -123,7 +127,7 @@ An interrupted operation may leave some settings or files already changed. The t
 
 ### Files and command line
 
-Open `启动.cmd` for normal use. [Module notes](模块说明.md) describe the implementation in Chinese. `app/UserSpace.Strings.json` contains both languages. Errors returned by Windows may remain in the operating system's language.
+Open `启动.cmd` for normal use. [Module notes](模块说明.md#english) describe the implementation in Chinese and English. `app/UserSpace.Strings.json` contains both languages. Errors returned by Windows may remain in the operating system's language.
 
 Read-only commands, run from the repository root:
 
